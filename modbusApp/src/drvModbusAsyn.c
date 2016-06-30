@@ -365,6 +365,8 @@ int drvModbusAsynConfigure(char *portName,
             maxLength = MAX_WRITE_WORDS;
             if (pollMsec != 0) pPlc->readOnceFunction = MODBUS_READ_INPUT_REGISTERS_F23;
             break;
+       case MODBUS_DIAGNOSTICS:  // TODO check if it is serial line?
+            break;
        default:
             errlogPrintf("%s::drvModbusAsynConfig port %s unsupported"
                          " Modbus function %d\n",
@@ -652,6 +654,9 @@ static asynStatus readUInt32D(void *drvPvt, asynUser *pasynUser, epicsUInt32 *va
                     *value = pPlc->data[offset];
                     if ((mask != 0 ) && (mask != 0xFFFF)) *value &= mask;
                     break;
+                case MODBUS_DIAGNOSTICS:
+                    printf("MODBUS_DIAGNOSTICS_SUB\n");
+                    break;
                 default:
                     asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_ERROR,
                               "%s::readUInt32D port %s invalid request for Modbus"
@@ -722,6 +727,13 @@ static asynStatus writeUInt32D(void *drvPvt, asynUser *pasynUser, epicsUInt32 va
                                              modbusAddress, &data, 1);
                     }
                     if (status != asynSuccess) return(status);
+                    break;
+                case MODBUS_DIAGNOSTICS:
+                    data &= ( value | ~mask );
+                    status = doModbusIO(pPlc, pPlc->modbusSlave, pPlc->modbusFunction, modbusAddress, &data, 1);
+                    if ( status != asynSuccess ) {
+                        return status;
+                    }
                     break;
                 default:
                     asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_ERROR,
@@ -1497,9 +1509,7 @@ static void readPoller(PLC_ID pPlc)
     }
 }
 
-
-
-static int doModbusIO(PLC_ID pPlc, int slave, int function, int start, 
+static int doModbusIO(PLC_ID pPlc, int slave, int function, int start,
                       epicsUInt16 *data, int len)
 {
     modbusReadRequest *readReq;
@@ -1510,6 +1520,8 @@ static int doModbusIO(PLC_ID pPlc, int slave, int function, int start,
     modbusWriteMultipleResponse *writeMultipleResp;
     modbusReadWriteMultipleRequest *readWriteMultipleReq;
     modbusExceptionResponse *exceptionResp;
+    modbusDiagRequest *diagReq;
+    modbusDiagResponse *diagResp;
     int requestSize=0;
     int replySize;
     unsigned char  *pCharIn, *pCharOut;
@@ -1619,7 +1631,7 @@ static int doModbusIO(PLC_ID pPlc, int slave, int function, int start,
             writeSingleReq->data = htons(bitOutput);
             requestSize = sizeof(modbusWriteSingleRequest);
             replySize = sizeof(modbusWriteSingleResponse);
-            asynPrint(pPlc->pasynUserTrace, ASYN_TRACEIO_DRIVER, 
+            asynPrint(pPlc->pasynUserTrace, ASYN_TRACEIO_DRIVER,
                       "%s::doModbusIO port %s WRITE_SINGLE_COIL"
                       " address=0%o value=0x%x\n",
                       driver, pPlc->portName, start, bitOutput);
@@ -1713,6 +1725,41 @@ static int doModbusIO(PLC_ID pPlc, int slave, int function, int start,
             requestSize = sizeof(modbusReadWriteMultipleRequest) + byteCount - 1;
             /* The -1 below is because the modbusReadResponse struct already has 1 byte of data */
             replySize = sizeof(modbusReadResponse) + 2*nread - 1;
+            break;
+        case MODBUS_DIAGNOSTICS:
+            diagReq = (modbusDiagRequest *)pPlc->modbusRequest;
+            diagReq->slave = slave;
+            diagReq->fcode = function;
+            diagReq->subCode = htons((epicsUInt16)start);
+            requestSize = sizeof(modbusDiagRequest);
+            switch ( start ) {
+                case MODBUS_DIAGNOSTICS_SUB_RESTART:
+                    if (*data) {
+                        bitOutput = 0xFF00;
+                    }
+                    else {
+                        bitOutput = 0;
+                    }
+                    diagReq->data[0] = htons(bitOutput);
+                    replySize = sizeof(modbusDiagResponse);
+                    asynPrint(pPlc->pasynUserTrace, ASYN_TRACEIO_DRIVER,
+                            "%s::%s port %s MODBUS_DIAGNOSTICS_SUB_RESTART value=%#06x\n",
+                            driver, __FUNCTION__, pPlc->portName, bitOutput);
+                    break;
+                case MODBUS_DIAGNOSTICS_SUB_STATUS:
+                    diagReq->data[0] = htons(0);
+                    replySize = sizeof(modbusDiagResponse);
+                    asynPrint(pPlc->pasynUserTrace, ASYN_TRACEIO_DRIVER,
+                            "%s::%s port %s MODBUS_DIAGNOSTICS_SUB_STATUS",
+                            driver, __FUNCTION__, pPlc->portName);
+                    break;
+                default:
+                    asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_ERROR, 
+                            "%s::doModbusIO, port %s unsupported diagnostics sub-function code %d\n", 
+                            driver, pPlc->portName, start);
+                    status = asynError;
+                    goto done;
+            }
             break;
 
 
@@ -1823,6 +1870,23 @@ static int doModbusIO(PLC_ID pPlc, int slave, int function, int start,
         case MODBUS_WRITE_MULTIPLE_REGISTERS:
             pPlc->writeOK++;
             writeMultipleResp = (modbusWriteMultipleResponse *)pPlc->modbusReply;
+            break;
+        case MODBUS_DIAGNOSTICS:
+            pPlc->writeOK++;
+            diagResp = (modbusDiagResponse *)pPlc->modbusReply;
+            //printf("diag read ok nread: %d\n", nread);
+            // TODO add check?
+            switch ( start ) {
+                case MODBUS_DIAGNOSTICS_SUB_STATUS:
+                    //printf("parse it %x\n", diagResp->data[0]);
+                    *((epicsUInt16 *)data) = diagResp->data[0]; // change byte order?
+                    break;
+                case MODBUS_DIAGNOSTICS_SUB_RESTART:
+                    break;
+                default:
+                    asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_ERROR, "%s::%s, port %s unimpletment sub-function: %d\n", driver, __FUNCTION__, pPlc->portName, start);
+                    status = asynError;
+            }
             break;
         case MODBUS_WRITE_MULTIPLE_REGISTERS_F23:
             pPlc->writeOK++;

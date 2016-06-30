@@ -282,6 +282,7 @@ static asynStatus writeIt(void *ppvt, asynUser *pasynUser,
                                              &nbytesActual);
             for ( cnt = 0; cnt < nWrite; cnt++ ) {
                 asynPrint(pasynUser, ASYN_TRACE_FLOW, "<%02X>", 0xFF & pPvt->buffer[cnt]);
+                //printf("<%02X>", 0xFF & pPvt->buffer[cnt]);
             }
             *nbytesTransfered = (nbytesActual > numchars) ? numchars : nbytesActual;
             break;

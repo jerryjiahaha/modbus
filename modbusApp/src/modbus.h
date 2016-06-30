@@ -22,8 +22,11 @@
 #define MODBUS_WRITE_MULTIPLE_REGISTERS      0x10
 #define MODBUS_READ_WRITE_MULTIPLE_REGISTERS 0x17
 
-#define MODBUS_EXCEPTION_FCN            0x80
+#define MODBUS_EXCEPTION_FCN                 0x80
 #define MODBUS_EXCEPTION_FRAME_SIZE 5
+
+#define MODBUS_DIAGNOSTICS_SUB_RESTART       0x01
+#define MODBUS_DIAGNOSTICS_SUB_STATUS        0x02
 
 #define MAX_MODBUS_FRAME_SIZE 600       /* Buffer size for input and output packets.
                                          * 513 (max for ASCII serial) should be enough, 
@@ -70,6 +73,21 @@ typedef struct modbusReadResponse_str
     unsigned char  byteCount;
     unsigned char  data[1];
 } PACKED_STRUCTURE modbusReadResponse;
+
+typedef struct modbusDiagRequest_str
+{
+    unsigned char    slave;
+    unsigned char    fcode;
+    unsigned short   subCode;
+    unsigned short   data[1];
+} PACKED_STRUCTURE modbusDiagRequest;
+
+typedef struct modbusDiagResponse_str
+{
+    unsigned char    fcode;
+    unsigned short   subCode;
+    unsigned short   data[1];
+} PACKED_STRUCTURE modbusDiagResponse;
 
 typedef struct modbusWriteSingleRequest_str
 {
