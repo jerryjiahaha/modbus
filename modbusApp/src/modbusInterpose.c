@@ -15,6 +15,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <assert.h>
 
 #include <cantProceed.h>
 #include <epicsAssert.h>
@@ -167,8 +168,8 @@ epicsShareFunc int modbusInterposeConfig(const char *portName,
 }
 
 
-static void computeCRC(char *buffer, int nchars, 
-                       unsigned char *CRC_Lo, unsigned char *CRC_Hi) 
+static void computeCRC(char *buffer, int nchars,
+                       unsigned char *CRC_Lo, unsigned char *CRC_Hi)
 {
     int CRC_Index ;              /* will index into CRC lookup table */
     int i;
@@ -244,13 +245,14 @@ static asynStatus writeIt(void *ppvt, asynUser *pasynUser,
     
     pasynUser->timeout = pPvt->timeout;
 
+    int cnt = 0;
     switch(pPvt->linkType) {
         case modbusLinkTCP:
             /* Build the MBAP header */
             mbapHeader.transactId    = htons(transactId);
             mbapHeader.protocolType  = htons(modbusEncoding);
             mbapHeader.cmdLength     = htons(cmdLength);
- 
+
             /* Copy the MBAP header to the local buffer */
             memcpy(pPvt->buffer, &mbapHeader, mbapSize);
 
@@ -260,7 +262,7 @@ static asynStatus writeIt(void *ppvt, asynUser *pasynUser,
             /* Send the frame with the underlying driver */
             nWrite = numchars + mbapSize;
             status = pPvt->pasynOctet->write(pPvt->octetPvt, pasynUser,
-                                             pPvt->buffer, nWrite, 
+                                             pPvt->buffer, nWrite,
                                              &nbytesActual);
             *nbytesTransfered = (nbytesActual > numchars) ? numchars : nbytesActual;
             break;
@@ -276,8 +278,11 @@ static asynStatus writeIt(void *ppvt, asynUser *pasynUser,
             /* Send the frame with the underlying driver */
             nWrite = numchars + 2;
             status = pPvt->pasynOctet->write(pPvt->octetPvt, pasynUser,
-                                             pPvt->buffer, nWrite, 
+                                             pPvt->buffer, nWrite,
                                              &nbytesActual);
+            for ( cnt = 0; cnt < nWrite; cnt++ ) {
+                asynPrint(pasynUser, ASYN_TRACE_FLOW, "<%02X>", 0xFF & pPvt->buffer[cnt]);
+            }
             *nbytesTransfered = (nbytesActual > numchars) ? numchars : nbytesActual;
             break;
 
@@ -350,13 +355,30 @@ static asynStatus readIt(void *ppvt, asynUser *pasynUser,
             break;
 
         case modbusLinkRTU:
-            nRead = maxchars + 3;
+            nRead = maxchars + 3 - MODBUS_EXCEPTION_FRAME_SIZE;
+            assert(nRead > 0);
+            // read MODBUS_EXCEPTION_FRAME_SIZE length first
+            status = pPvt->pasynOctet->read(pPvt->octetPvt, pasynUser, pPvt->buffer, MODBUS_EXCEPTION_FRAME_SIZE, &nbytesActual, eomReason);
+            // read failed
+            if ( status != asynSuccess ) {
+                asynPrint(pasynUser, ASYN_TRACE_ERROR, "%s::%s, (pre)read failed\n", driver, __FUNCTION__);
+                return asynError;
+            }
+            // first we assume that we get response with Exception Code
+            computeCRC(pPvt->buffer, nbytesActual, &CRC_Lo, &CRC_Hi);
+            if ( (pPvt->buffer[1] & MODBUS_EXCEPTION_FCN) && (CRC_Lo == 0) && (CRC_Hi == 0) ) {
+                asynPrint(pasynUser, ASYN_TRACE_FLOW, "%s::%s, Get Exception Code\n", driver, __FUNCTION__);
+                goto finish_read; // really get exception
+                //return asynError;
+            }
+            // we read again, now it must be a normal response
             status = pPvt->pasynOctet->read(pPvt->octetPvt, pasynUser,
-                                            pPvt->buffer, nRead,
+                                            pPvt->buffer + MODBUS_EXCEPTION_FRAME_SIZE, nRead,
                                             &nbytesActual, eomReason);
             if (status != asynSuccess) return status;
-            /* Compute and check the CRC including the CRC bytes themselves, 
+            /* Compute and check the CRC including the CRC bytes themselves,
              * should be 0 */
+            nbytesActual += MODBUS_EXCEPTION_FRAME_SIZE;
             computeCRC(pPvt->buffer, nbytesActual, &CRC_Lo, &CRC_Hi);
             if ((CRC_Lo != 0) || (CRC_Hi != 0)) {
                 asynPrint(pasynUser, ASYN_TRACE_ERROR,
@@ -364,6 +386,7 @@ static asynStatus readIt(void *ppvt, asynUser *pasynUser,
                           driver);
                 return asynError;
             }
+finish_read:
             /* Copy bytes beyond address to output buffer */
             nRead = nbytesActual;
             nRead = nRead - 3;
@@ -395,7 +418,7 @@ static asynStatus readIt(void *ppvt, asynUser *pasynUser,
             if (LRC != data[i]) {
                 asynPrint(pasynUser, ASYN_TRACE_ERROR,
                           "%s::readIt, LRC error, nRead=%d, received LRC=0x%x, computed LRC=0x%x\n",
-                          driver, nRead, data[i], LRC);
+                          driver, (int)nRead, data[i], LRC);
                 return asynError;
             }
             /* The buffer now contains binary data, but the first byte is address.  
@@ -408,11 +431,11 @@ static asynStatus readIt(void *ppvt, asynUser *pasynUser,
             *nbytesTransfered = nRead;
             break;
     }
-     
+
     return status;
 }
 
-
+
 static asynStatus flushIt(void *ppvt, asynUser *pasynUser)
 {
     modbusPvt *pPvt = (modbusPvt *)ppvt;
@@ -426,7 +449,7 @@ static asynStatus registerInterruptUser(void *ppvt, asynUser *pasynUser,
     return pPvt->pasynOctet->registerInterruptUser(pPvt->octetPvt,
                                                pasynUser, callback, userPvt, 
                                                registrarPvt);
-} 
+}
 
 static asynStatus cancelInterruptUser(void *drvPvt, asynUser *pasynUser,
      void *registrarPvt)
@@ -434,7 +457,7 @@ static asynStatus cancelInterruptUser(void *drvPvt, asynUser *pasynUser,
     modbusPvt *pPvt = (modbusPvt *)drvPvt;
     return pPvt->pasynOctet->cancelInterruptUser(pPvt->octetPvt,
                                              pasynUser,registrarPvt);
-} 
+}
 
 static asynStatus setInputEos(void *ppvt, asynUser *pasynUser,
     const char *eos, int eoslen)
@@ -467,7 +490,7 @@ static asynStatus getOutputEos(void *ppvt, asynUser *pasynUser,
                                      eos, eossize, eoslen);
 }
 
-
+
 /* register modbusInterposeConfig*/
 static const iocshArg modbusInterposeConfigArg0 = { "portName", iocshArgString };
 static const iocshArg modbusInterposeConfigArg1 = { "link type", iocshArgInt };
@@ -497,3 +520,5 @@ static void modbusInterposeRegister(void)
     }
 }
 epicsExportRegistrar(modbusInterposeRegister);
+
+// vim: expandtab:ts=4:sw=4

@@ -172,6 +172,7 @@ typedef struct modbusStr
     int enableHistogram;
     int histogramMsPerBin;
     int readbackOffset;  /* Readback offset for Wago devices */
+    int noReadBeforeWrite; /* If we do function 3(read) before 6(write) */
 } modbusStr_t;
 
 
@@ -297,15 +298,16 @@ static asynInt32Array drvInt32Array = {
 **                                                                    
 */
 
-int drvModbusAsynConfigure(char *portName, 
-                           char *octetPortName, 
+int drvModbusAsynConfigure(char *portName,
+                           char *octetPortName,
                            int modbusSlave,
-                           int modbusFunction, 
-                           int modbusStartAddress, 
+                           int modbusFunction,
+                           int modbusStartAddress,
                            int modbusLength,
                            modbusDataType_t dataType,
-                           int pollMsec, 
-                           char *plcType)
+                           int pollMsec,
+                           char *plcType,
+                           int noReadBeforeWrite)
 {
     int status;
     PLC_ID pPlc;
@@ -325,10 +327,11 @@ int drvModbusAsynConfigure(char *portName,
     pPlc->modbusLength = modbusLength;
     pPlc->pollDelay = pollMsec/1000.;
     pPlc->histogramMsPerBin = 1;
+    pPlc->noReadBeforeWrite = noReadBeforeWrite;
 
     /* Set readback offset for Wago devices for which the register readback address 
      * is different from the register write address */
-    if (strstr(pPlc->plcType, WAGO_ID_STRING) != NULL) 
+    if (strstr(pPlc->plcType, WAGO_ID_STRING) != NULL)
         pPlc->readbackOffset = WAGO_OFFSET;
 
     switch(pPlc->modbusFunction) {
@@ -703,8 +706,8 @@ static asynStatus writeUInt32D(void *drvPvt, asynUser *pasynUser, epicsUInt32 va
                     if (status != asynSuccess) return(status);
                     break;
                 case MODBUS_WRITE_SINGLE_REGISTER:
-                    /* Do this as a read/modify/write if mask is not all 0 or all 1 */
-                    if ((mask == 0) || (mask == 0xFFFF)) {
+                    /* Do this as a read/modify/write if mask is not all 0 or all 1  or we DO Want to read before write*/
+                    if ( (mask == 0) || (mask == 0xFFFF) || (pPlc->noReadBeforeWrite == 1) ) {
                         status = doModbusIO(pPlc, pPlc->modbusSlave, pPlc->modbusFunction,
                                              modbusAddress, &data, 1);
                     } else {
@@ -1531,31 +1534,31 @@ static int doModbusIO(PLC_ID pPlc, int slave, int function, int start,
         status = pasynManager->isConnected(pPlc->pasynUserOctet, &pPlc->isConnected);
          /* If we have an I/O error or are disconnected then disconnect device and reconnect */
         if ((pPlc->ioStatus != asynSuccess) || !pPlc->isConnected) {
-            if (pPlc->ioStatus != asynSuccess) 
-                asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_ERROR, 
+            if (pPlc->ioStatus != asynSuccess)
+                asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_ERROR,
                           "%s::doModbusIO port %s has I/O error\n",
                           driver, pPlc->portName);
-            if (!pPlc->isConnected) 
-                asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_ERROR, 
+            if (!pPlc->isConnected)
+                asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_ERROR,
                           "%s::doModbusIO port %s is disconnected\n",
                           driver, pPlc->portName);
             status = pasynCommonSyncIO->disconnectDevice(pPlc->pasynUserCommon);
             if (status == asynSuccess) {
-                asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_FLOW, 
+                asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_FLOW,
                           "%s::doModbusIO port %s disconnect device OK\n",
                           driver, pPlc->portName);
             } else {
-                asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_ERROR, 
+                asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_ERROR,
                           "%s::doModbusIO port %s disconnect error=%s\n",
                           driver, pPlc->portName, pPlc->pasynUserOctet->errorMessage);
             }
             status = pasynCommonSyncIO->connectDevice(pPlc->pasynUserCommon);
             if (status == asynSuccess) {
-                asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_FLOW, 
+                asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_FLOW,
                           "%s::doModbusIO port %s connect device OK\n",
                           driver, pPlc->portName);
             } else {
-                asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_ERROR, 
+                asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_ERROR,
                           "%s::doModbusIO port %s connect device error=%s\n",
                           driver, pPlc->portName, pPlc->pasynUserOctet->errorMessage);
                 goto done;
@@ -1737,8 +1740,8 @@ static int doModbusIO(PLC_ID pPlc, int slave, int function, int start,
     if (status != asynSuccess) {
         asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_ERROR,
                  "%s::doModbusIO port %s error calling writeRead,"
-                 " error=%s, nwrite=%d/%d, nread=%d\n", 
-                 driver, pPlc->portName, 
+                 " error=%s, nwrite=%d/%d, nread=%d\n",
+                 driver, pPlc->portName,
                  pPlc->pasynUserOctet->errorMessage, (int)nwrite, requestSize, (int)nread);
         pPlc->IOErrors++;
         goto done;
@@ -1752,22 +1755,22 @@ static int doModbusIO(PLC_ID pPlc, int slave, int function, int start,
         bin = msec / pPlc->histogramMsPerBin;
         if (bin < 0) bin = 0;
         /* Longer times go in last bin of histogram */
-        if (bin >= HISTOGRAM_LENGTH-1) bin = HISTOGRAM_LENGTH-1; 
+        if (bin >= HISTOGRAM_LENGTH-1) bin = HISTOGRAM_LENGTH-1;
         pPlc->timeHistogram[bin]++;
-    }     
+    }
 
     /* See if there is a Modbus exception */
     readResp = (modbusReadResponse *)pPlc->modbusReply;
     if (readResp->fcode & MODBUS_EXCEPTION_FCN) {
         exceptionResp = (modbusExceptionResponse *)pPlc->modbusReply;
         asynPrint(pPlc->pasynUserTrace, ASYN_TRACE_ERROR,
-                  "%s::doModbusIO port %s Modbus exception=%d\n", 
+                  "%s::doModbusIO port %s Modbus exception=%d\n",
                   driver, pPlc->portName, exceptionResp->exception);
         status = asynError;
         goto done;
     }
 
-    /* Make sure the function code in the response is the same as the one 
+    /* Make sure the function code in the response is the same as the one
      * in the request? */
 
     switch (function) {
@@ -2156,8 +2159,9 @@ static const iocshArg ConfigureArg5 = {"Modbus length",        iocshArgInt};
 static const iocshArg ConfigureArg6 = {"Data type (0=binary, 1=BCD)", iocshArgInt};
 static const iocshArg ConfigureArg7 = {"Poll time (msec)",     iocshArgInt};
 static const iocshArg ConfigureArg8 = {"PLC type",             iocshArgString};
+static const iocshArg ConfigureArg9 = {"NoReadBeforeWrite (0=no, 1=yes)", iocshArgInt};
 
-static const iocshArg * const drvModbusAsynConfigureArgs[9] = {
+static const iocshArg * const drvModbusAsynConfigureArgs[10] = {
     &ConfigureArg0,
     &ConfigureArg1,
     &ConfigureArg2,
@@ -2166,16 +2170,17 @@ static const iocshArg * const drvModbusAsynConfigureArgs[9] = {
     &ConfigureArg5,
     &ConfigureArg6,
     &ConfigureArg7,
-    &ConfigureArg8
+    &ConfigureArg8,
+    &ConfigureArg9
 };
 
 static const iocshFuncDef drvModbusAsynConfigureFuncDef=
-                                                    {"drvModbusAsynConfigure", 9,
+                                                    {"drvModbusAsynConfigure", 10,
                                                      drvModbusAsynConfigureArgs};
 static void drvModbusAsynConfigureCallFunc(const iocshArgBuf *args)
 {
-  drvModbusAsynConfigure(args[0].sval, args[1].sval, args[2].ival, args[3].ival, args[4].ival, 
-                         args[5].ival, args[6].ival, args[7].ival, args[8].sval);
+  drvModbusAsynConfigure(args[0].sval, args[1].sval, args[2].ival, args[3].ival, args[4].ival,
+                         args[5].ival, args[6].ival, args[7].ival, args[8].sval, args[9].ival);
 }
 
 
@@ -2185,3 +2190,5 @@ static void drvModbusAsynRegister(void)
 }
 
 epicsExportRegistrar(drvModbusAsynRegister);
+
+// vim: expandtab:ts=4:sw=4

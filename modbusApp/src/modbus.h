@@ -17,11 +17,13 @@
 #define MODBUS_READ_INPUT_REGISTERS          0x04
 #define MODBUS_WRITE_SINGLE_COIL             0x05
 #define MODBUS_WRITE_SINGLE_REGISTER         0x06
+#define MODBUS_DIAGNOSTICS                   0x08 // (Serial Line Only)
 #define MODBUS_WRITE_MULTIPLE_COILS          0x0F
 #define MODBUS_WRITE_MULTIPLE_REGISTERS      0x10
 #define MODBUS_READ_WRITE_MULTIPLE_REGISTERS 0x17
 
 #define MODBUS_EXCEPTION_FCN            0x80
+#define MODBUS_EXCEPTION_FRAME_SIZE 5
 
 #define MAX_MODBUS_FRAME_SIZE 600       /* Buffer size for input and output packets.
                                          * 513 (max for ASCII serial) should be enough, 
@@ -121,7 +123,23 @@ typedef struct modbusExceptionResponse_str
     unsigned char  exception;
 } PACKED_STRUCTURE modbusExceptionResponse;
 
+/* ref: www.simplymodbus.ca/exceptions.htm */
+typedef enum {
+    ILLEGAL_FUNCTION = 0x01,
+    ILLEGAL_DATA_ADDRESS = 0x02,
+    ILLEGAL_DATA_VALUE = 0x03,
+    SLAVE_DEVICE_FAILURE = 0x04,
+    ACKNOWLEDGE = 0x05,
+    SLAVE_DEVICE_BUSY = 0x06,
+    NEGATIVE_ACKNOWLEDGE = 0x07,
+    MEMORY_PARITY_ERROR = 0x08,
+    GATEWAY_PATH_UNAVAILABLE = 0x0A,
+    GATEWAY_TARGET_DEVICE_FAILED_TO_RESPOND = 0x0B
+} modbusExceptionCode;
+
 /* Revert to packing that was in effect when compilation started */
 #pragma pack()
 
-#endif 
+#endif
+
+// vim: expandtab:ts=4:sw=4

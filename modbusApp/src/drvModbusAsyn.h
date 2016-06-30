@@ -54,12 +54,13 @@ typedef enum {
 #define MAX_MODBUS_DATA_TYPES 11
 
 
-int drvModbusAsynConfigure(char *portName, 
-                           char *octetPortName, 
+int drvModbusAsynConfigure(char *portName,
+                           char *octetPortName,
                            int modbusSlave,
-                           int modbusFunction, 
-                           int modbusStartAddress, 
+                           int modbusFunction,
+                           int modbusStartAddress,
                            int modbusLength,
                            modbusDataType_t dataType,
-                           int pollMsec, 
-                           char *plcType);
+                           int pollMsec,
+                           char *plcType,
+                           int readBeforeWrite);
