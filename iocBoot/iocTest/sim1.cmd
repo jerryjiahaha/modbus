@@ -1,6 +1,9 @@
+#!/opt/epics/modules/modbus/bin/linux-x86_64/modbusApp
 # simulator.cmd
 
-dbLoadDatabase("../../dbd/modbus.dbd")
+epicsEnvSet("MODBUS", "/opt/epics/modules/modbus")
+
+dbLoadDatabase("$(MODBUS)/dbd/modbus.dbd")
 modbus_registerRecordDeviceDriver(pdbbase)
 
 # Use the following commands for TCP/IP
